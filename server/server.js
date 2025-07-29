@@ -1,102 +1,111 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+
+const dotenv = require('dotenv');
+dotenv.config();
+
+const connectDB = require('./config/db');
+connectDB();
+
+const Domain =  require("./models/Model");
 
 const app = express();
-const PORT = 3000 || process.env.PORT;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-const DATA_FILE = path.join(__dirname, 'domainList.json');
-
-// JSON dosyasını oku
-function readData() {
-  const data = fs.readFileSync(DATA_FILE, 'utf-8');
-  return JSON.parse(data);
-}
-
-// JSON dosyasına yaz
-function writeData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8');
-}
 
 app.get('/', (req, res) => {
     res.send("Uygulama çalışıyor");
 });
 
-app.get('/domains', (req, res) => {
-    const data = readData();
-    res.json(data);
+//Tüm domainleri alma
+app.get("/domains", async (req,res) => {
+   try {
+      const domains = await Domain.find();
+      res.json(domains);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
 });
 
-app.post('/domains', (req, res) => {
-    const data = readData();
-    // Beklenen format: { "yeni.com": ["yeni.com", "sub.yeni.com"] }
-    if (
-      typeof req.body === 'object' &&
-      !Array.isArray(req.body) &&
-      Object.keys(req.body).length === 1
-    ) {
-      const domain = Object.keys(req.body)[0];
-      const subdomains = req.body[domain];
-      if (!domain || !Array.isArray(subdomains)) {
-        return res.status(400).json({ error: 'Invalid format' });
+//Üst domain ekleme
+app.post("/domains", async (req,res) => {
+  try {
+      const domain = new Domain(req.body);
+      await domain.save();
+      res.status(201).json(domain);
+    } catch (error) {
+      res.status(400).json({ message: error.message });
+    }
+});
+
+//Var olan domaine subdomainler eklemek
+app.patch("/domains/:id/add-subdomains", async (req, res) => {
+  try {
+    const domainId = req.params.id;
+    const { newSubdomains } = req.body; // yeni subdomain(ler) dizi olarak gelmeli
+
+    if (!Array.isArray(newSubdomains)) {
+      return res.status(400).json({ message: "newSubdomains bir dizi olmalı" });
+    }
+
+    const updatedDomain = await Domain.findByIdAndUpdate(
+      domainId,
+      { $addToSet: { subdomains: { $each: newSubdomains } } }, // tekrar edenleri önler
+      { new: true }
+    );
+
+    if (!updatedDomain) {
+      return res.status(404).json({ message: "Domain bulunamadı" });
+    }
+
+    res.json(updatedDomain);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+//domainleri silme
+app.delete("/domains/:id", async (req,res) => {
+  try {
+      const domain = await Domain.findByIdAndDelete(req.params.id);
+      
+      if (!domain) {
+        return res.status(404).json({ message: 'Ürün bulunamadı' });
       }
-      if (data[domain]) {
-        return res.status(400).json({ error: 'Domain already exists' });
-      }
-      data[domain] = subdomains;
-      writeData(data);
-      return res.status(201).json({ domain, subdomains });
-    }
-    return res.status(400).json({ error: 'Invalid format. Use { \"domain.com\": [ ... ] }' });
-});  
-
-app.delete('/domains/:domain', (req, res) => {
-    const data = readData();
-    const { domain } = req.params;
-    if (!data[domain]) {
-      return res.status(404).json({ error: 'Domain not found' });
-    }
-    const deleted = data[domain];
-    delete data[domain];
-    writeData(data);
-    res.json({ deleted });
+      
+      res.json({ message: 'Ürün başarıyla silindi' });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+  }
 });
 
-app.post('/domains/:domain/subdomains', (req, res) => {
-    const data = readData();
-    const { domain } = req.params;
-    const { subdomain } = req.body;
-    if (!data[domain]) {
-      return res.status(404).json({ error: 'Domain not found' });
-    }
-    if (!subdomain) {
-      return res.status(400).json({ error: 'subdomain is required' });
-    }
-    if (data[domain].includes(subdomain)) {
-      return res.status(400).json({ error: 'Subdomain already exists' });
-    }
-    data[domain].push(subdomain);
-    writeData(data);
-    res.status(201).json({ subdomain });
-});
+//Bir domainin subdomainlerini silme
+app.patch("/domains/:id/remove-subdomain", async (req, res) => {
+  try {
+    const domainId = req.params.id;
+    const { subdomainToRemove } = req.body;
 
-app.delete('/domains/:domain/subdomains/:subdomain', (req, res) => {
-    const data = readData();
-    const { domain, subdomain } = req.params;
-    if (!data[domain]) {
-      return res.status(404).json({ error: 'Domain not found' });
+    if (!subdomainToRemove) {
+      return res.status(400).json({ message: "Silinecek alt domain belirtilmedi." });
     }
-    const index = data[domain].indexOf(subdomain);
-    if (index === -1) {
-      return res.status(404).json({ error: 'Subdomain not found' });
+
+    const updatedDomain = await Domain.findByIdAndUpdate(
+      domainId,
+      { $pull: { subdomains: subdomainToRemove } }, // Belirtilen subdomain'i çıkarır
+      { new: true }
+    );
+
+    if (!updatedDomain) {
+      return res.status(404).json({ message: "Domain bulunamadı." });
     }
-    const deleted = data[domain].splice(index, 1);
-    writeData(data);
-    res.json({ deleted: deleted[0] });
+
+    res.json(updatedDomain);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 });
 
 app.listen(PORT, () => {
