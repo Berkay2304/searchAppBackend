@@ -108,6 +108,74 @@ app.patch("/domains/:id/remove-subdomain", async (req, res) => {
   }
 });
 
+// Üst domain ismini güncelle
+app.patch("/domains/:id/update-domain", async (req, res) => {
+  try {
+    const domainId = req.params.id;
+    const { newDomain } = req.body;
+
+    if (!newDomain || typeof newDomain !== "string") {
+      return res.status(400).json({ message: "Yeni domain ismi geçerli değil." });
+    }
+
+    // Aynı isimde başka domain varsa engelle (opsiyonel)
+    const existing = await Domain.findOne({ domain: newDomain });
+    if (existing && existing._id.toString() !== domainId) {
+      return res.status(400).json({ message: "Bu domain ismi zaten kullanılıyor." });
+    }
+
+    const updatedDomain = await Domain.findByIdAndUpdate(
+      domainId,
+      { domain: newDomain },
+      { new: true }
+    );
+
+    if (!updatedDomain) {
+      return res.status(404).json({ message: "Domain bulunamadı." });
+    }
+
+    res.json(updatedDomain);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Subdomain ismini güncelle
+app.patch("/domains/:id/update-subdomain", async (req, res) => {
+  try {
+    const domainId = req.params.id;
+    const { oldSubdomain, newSubdomain } = req.body;
+
+    if (!oldSubdomain || !newSubdomain) {
+      return res.status(400).json({ message: "Eski ve yeni subdomain belirtilmeli." });
+    }
+
+    const domain = await Domain.findById(domainId);
+    if (!domain) {
+      return res.status(404).json({ message: "Domain bulunamadı." });
+    }
+
+    // Eski subdomain dizide yoksa hata dön
+    const index = domain.subdomains.indexOf(oldSubdomain);
+    if (index === -1) {
+      return res.status(400).json({ message: "Güncellenecek subdomain bulunamadı." });
+    }
+
+    // Aynı subdomain zaten varsa engelle (opsiyonel)
+    if (domain.subdomains.includes(newSubdomain)) {
+      return res.status(400).json({ message: "Yeni subdomain zaten mevcut." });
+    }
+
+    domain.subdomains[index] = newSubdomain;
+    await domain.save();
+
+    res.json(domain);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
